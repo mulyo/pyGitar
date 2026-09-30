@@ -1,0 +1,55 @@
+# ===== Python Virtual Environment =====
+.venv/
+venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+
+# ===== pytest / mypy / ruff cache =====
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ===== PyInstaller / Nuitka build =====
+*.spec
+__main__.py
+
+# ===== Data & Cache Aplikasi GuitarLoop (PRIVASI PENGGUNA!) =====
+# Note: ini folder di %APPDATA%\GuitarLoop, tapi jika ada copy lokal:
+cache/
+*.db
+*.sqlite
+*.sqlite3
+*.wav
+*.npy
+
+# ===== IDE / Editor =====
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ===== Biner eksternal (ffmpeg / libmpv) — tidak didistribusikan via git =====
+# Biarkan user download sendiri sesuai README
+bin/
+*.dll
+*.so
+*.dylib
+ffmpeg.exe
+ffprobe.exe
+mpv.exe
+
+# ===== Log & debug =====
+*.log
+
+PRD.md
