@@ -11,6 +11,7 @@ __pycache__/
 .eggs/
 build/
 dist/
+PRD.md
 
 # ===== pytest / mypy / ruff cache =====
 .pytest_cache/

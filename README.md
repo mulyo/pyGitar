@@ -57,3 +57,9 @@ pytest guitarloop/tests -v
 ```cmd
 pytest guitarloop/tests/test_timefmt.py guitarloop/tests/test_hashing.py -v
 undefined
+
+
+debug import audio 
+python -u _debug_import.py "C:\Users\msa\Downloads\YuE2_00004.flac"
+
+python -u _debug_engine.py "C:\Users\msa\Downloads\YuE2_00004.flac"

@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QSlider,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -40,9 +41,23 @@ class TransportBar(QWidget):
         self._build_ui()
 
     def _build_ui(self) -> None:
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
-        layout.setSpacing(8)
+        # ============================================================
+        # 2 BARIS (sesuai permintaan user: "biar tidak terlalu panjang")
+        # ============================================================
+        # ROW 1 (atas)  : tombol kontrol + time label + seek slider
+        # ROW 2 (bawah) : speed slider + volume slider
+        # ============================================================
+        root = QVBoxLayout(self)
+        root.setContentsMargins(6, 3, 6, 3)
+        root.setSpacing(2)
+
+        row1 = QHBoxLayout()
+        row1.setContentsMargins(0, 0, 0, 0)
+        row1.setSpacing(6)
+
+        row2 = QHBoxLayout()
+        row2.setContentsMargins(0, 0, 0, 0)
+        row2.setSpacing(6)
 
         self.btn_back = QPushButton(t("btn_seek_back"), self)
         self.btn_play = QPushButton(t("btn_play"), self)
@@ -50,24 +65,24 @@ class TransportBar(QWidget):
         self.btn_fwd = QPushButton(t("btn_seek_fwd"), self)
 
         for w in (self.btn_back, self.btn_play, self.btn_stop, self.btn_fwd):
-            w.setMinimumHeight(32)
+            w.setMinimumHeight(28)
 
         self.lbl_time = QLabel(t("not_loaded"), self)
         self.lbl_time.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_time.setMinimumWidth(220)
+        self.lbl_time.setMinimumWidth(180)  # (dari 220 → 180, hemat ruang 640px)
         font = self.lbl_time.font()
         font.setStyleHint(font.StyleHint.Monospace)
         self.lbl_time.setFont(font)
 
         self.seek_slider = QSlider(Qt.Orientation.Horizontal, self)
         self.seek_slider.setRange(0, 0)
-        self.seek_slider.setMinimumWidth(300)
+        # (tidak perlu setMinimumWidth, sudah stretch via row1.addWidget(slider, 1))
 
         self.lbl_speed = QLabel(t("lbl_speed"), self)
         self.speed_slider = QSlider(Qt.Orientation.Horizontal, self)
         self.speed_slider.setRange(self._SPEED_MIN, self._SPEED_MAX)
         self.speed_slider.setValue(100)
-        self.speed_slider.setMinimumWidth(140)
+        self.speed_slider.setMinimumWidth(120)  # dari 140 → 120
         self.lbl_speed_value = QLabel("100 %", self)
         self.lbl_speed_value.setMinimumWidth(56)
         self.lbl_speed_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -76,22 +91,28 @@ class TransportBar(QWidget):
         self.vol_slider = QSlider(Qt.Orientation.Horizontal, self)
         self.vol_slider.setRange(0, 100)
         self.vol_slider.setValue(80)
-        self.vol_slider.setMinimumWidth(100)
+        self.vol_slider.setMinimumWidth(90)  # dari 100 → 90
 
-        layout.addWidget(self.btn_back)
-        layout.addWidget(self.btn_play)
-        layout.addWidget(self.btn_stop)
-        layout.addWidget(self.btn_fwd)
-        layout.addSpacing(8)
-        layout.addWidget(self.lbl_time)
-        layout.addWidget(self.seek_slider, 1)
-        layout.addSpacing(12)
-        layout.addWidget(self.lbl_speed)
-        layout.addWidget(self.speed_slider)
-        layout.addWidget(self.lbl_speed_value)
-        layout.addSpacing(12)
-        layout.addWidget(self.lbl_vol)
-        layout.addWidget(self.vol_slider)
+        # ================== ROW 1 ==================
+        row1.addWidget(self.btn_back)
+        row1.addWidget(self.btn_play)
+        row1.addWidget(self.btn_stop)
+        row1.addWidget(self.btn_fwd)
+        row1.addSpacing(6)
+        row1.addWidget(self.lbl_time)
+        row1.addWidget(self.seek_slider, 1)  # stretch = 1 (habiskan sisa lebar)
+
+        # ================== ROW 2 ==================
+        row2.addWidget(self.lbl_speed)
+        row2.addWidget(self.speed_slider, 1)  # stretch = 1
+        row2.addWidget(self.lbl_speed_value)
+        row2.addSpacing(12)
+        row2.addWidget(self.lbl_vol)
+        row2.addWidget(self.vol_slider, 1)  # stretch = 1
+
+        # Masukkan row1 & row2 ke layout root vertikal
+        root.addLayout(row1)
+        root.addLayout(row2)
 
         # ---- signal wiring ----
         self.btn_play.clicked.connect(self._on_play_click)

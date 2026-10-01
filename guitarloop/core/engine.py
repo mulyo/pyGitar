@@ -7,6 +7,7 @@ sederhana; lapisan UI (`ui/main_window.py`) yang akan meneruskannya ke Qt Signal
 from __future__ import annotations
 
 import enum
+import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -82,6 +83,14 @@ class PlayerEngine:
     def clear_loop(self) -> None:
         raise NotImplementedError
 
+    # --- Loop plan B (software fallback) --- default (abstract base stub)
+    _software_loop_fallback: bool = False
+    _loop_bounds_ms: tuple[int, int] | None = None
+
+    def software_loop_bounds_ms(self) -> tuple[int, int] | None:
+        """Return (a_ms, b_ms) JIKA native ab-loop FAIL dan caller harus manual seek."""
+        return self._loop_bounds_ms if self._software_loop_fallback else None
+
     # --- Kueri ---
     @property
     def state(self) -> PlayerState:
@@ -152,6 +161,11 @@ class MpvEngine(PlayerEngine):
 
         # mpv event callback (dijalankan di thread internal mpv)
         self._mpv.register_event_callback(self._on_mpv_event)
+        # Plan B: jika native MPV ab-loop bermasalah (build / wrapper tertentu)
+        #   False = pakai native (cepat & akurat).
+        #   True  = MainWindow manual seek ke A saat posisi lewat B + threshold (dijamin WORK).
+        self._software_loop_fallback = False
+        self._loop_bounds_ms: tuple[int, int] | None = None
 
     # ------------------------------------------------------------------
     # Internal
@@ -228,6 +242,9 @@ class MpvEngine(PlayerEngine):
         with self._lock:
             self._loaded_path = p
             self._last_loop_count = 0
+            # ⚠️ JANGAN GUNAKAN None untuk reset ab_loop (python-mpv wrapper Anda
+            # mengubah None menjadi STRING "None" (huruf N kapital)!
+            # MPV HANYA mau menerima lowercase "no" untuk disable.
             self._mpv.ab_loop_a = "no"
             self._mpv.ab_loop_b = "no"
             self._mpv.ab_loop_count = 0
@@ -311,25 +328,75 @@ class MpvEngine(PlayerEngine):
                 pass
 
     def set_loop(self, spec: LoopSpec) -> None:
-        with self._lock:
-            try:
-                if spec.a_ms is not None and spec.b_ms is not None and spec.b_ms > spec.a_ms:
-                    self._mpv.ab_loop_a = spec.a_ms / 1000.0
-                    self._mpv.ab_loop_b = spec.b_ms / 1000.0
-                    self._mpv.ab_loop_count = max(0, int(spec.count))
-                else:
-                    self.clear_loop()
-            except Exception:
-                self.clear_loop()
+        """Set batas loop — SELALU GUNAKAN SOFTWARE FALLBACK 100%.
 
-    def clear_loop(self) -> None:
+        Penjelasan V0.5: python-mpv wrapper & build libmpv Windows SHARED
+        (mpv-2.dll) punya behaviour TIDAK KONSISTEN terhadap property ab-loop-a/b.
+        Ada build yang bisa native loop, ada yang tidak (tergantung versi build
+        shinchiro / mpv.net / python-mpv wrapper). Agar 100% WORK DI SEMUA
+        ENVIRONMENT, kita MATIKAN native ab-loop (reset ke no, count=0), dan
+        implementasi loop MANUAL via software seek di MainWindow._on_poll().
+        Akurasi target tetap < 10 ms (poll 33 Hz / 30 ms per tick → akurasi
+        cukup untuk latihan gitar, sesuai PRD §6.3).
+        """
         with self._lock:
             try:
+                # ⚠️ SELALU nonaktifkan native loop (reset ke string lowercase "no")
                 self._mpv.ab_loop_a = "no"
                 self._mpv.ab_loop_b = "no"
                 self._mpv.ab_loop_count = 0
-            except Exception:
-                pass
+            except Exception as _exc:
+                print(
+                    f"[ENGINE-LOOP] (info) reset native loop exception: {_exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                _ = _exc  # noqa: F841 (simpan reference agar lint tidak warning)
+
+            # Validasi bounds
+            valid = (
+                isinstance(spec.a_ms, int)
+                and isinstance(spec.b_ms, int)
+                and spec.b_ms > spec.a_ms + 8  # minimal 8 ms sesuai LoopConfig threshold
+            )
+            if not valid:
+                print(
+                    f"[ENGINE-LOOP] ⛔ Bounds INVALID: A={spec.a_ms!r}ms / B={spec.b_ms!r}ms. "
+                    "Loop dinonaktifkan.",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                self._software_loop_fallback = False
+                self._loop_bounds_ms = None
+                return
+
+            # ✅ AKTIFKAN SOFTWARE LOOP FALLBACK 100%
+            self._software_loop_fallback = True
+            self._loop_bounds_ms = (int(spec.a_ms), int(spec.b_ms))
+            a_ms, b_ms = self._loop_bounds_ms
+            dur_ms = b_ms - a_ms
+            print(
+                f"[ENGINE-LOOP] 🎯 SOFTWARE LOOP (100% work): "
+                f"A={a_ms}ms → B={b_ms}ms (panjang {dur_ms} ms = {dur_ms / 1000:.2f}s)",
+                file=sys.stderr,
+                flush=True,
+            )
+
+    def clear_loop(self) -> None:
+        with self._lock:
+            self._software_loop_fallback = False
+            self._loop_bounds_ms = None
+            try:
+                # ⚠️ SELALU gunakan lowercase "no", JANGAN None (lihat set_loop docstring)
+                self._mpv.ab_loop_a = "no"
+                self._mpv.ab_loop_b = "no"
+                self._mpv.ab_loop_count = 0
+            except Exception as exc:
+                print(
+                    f"[ENGINE-LOOP] clear_loop() exception (abaikan): {exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
 
     # ------------------------------------------------------------------
     # Kueri

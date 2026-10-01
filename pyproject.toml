@@ -58,4 +58,3 @@ warn_return_any = false
 
 [tool.pytest.ini_options]
 testpaths = ["guitarloop/tests"]
-qt_wait_signal_timeout = 2000

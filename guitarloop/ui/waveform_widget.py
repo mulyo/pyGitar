@@ -11,12 +11,24 @@ Fitur V0.1:
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 import numpy as np
 from PySide6.QtCore import QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPaintEvent, QPen, QWheelEvent
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QFont,
+    QMouseEvent,
+    QPainter,
+    QPaintEvent,
+    QPen,
+    QWheelEvent,
+)
 from PySide6.QtWidgets import QWidget
 
 from guitarloop.core.audio_import import WaveformPeaks
+from guitarloop.core.markers import Marker
 from guitarloop.utils.i18n import t
 
 # Palet warna (tema terang default; bisa diganti V1.2)
@@ -27,13 +39,21 @@ _WAVE_OUTLINE = QColor("#2E5F7D")
 _PLAYHEAD = QColor("#C43A31")
 _LOOP_AREA = QColor(255, 236, 170, 110)
 _TEXT = QColor("#5A4E3C")
+_MARKER_HIT_PX = 6  # toleransi klik marker (pixel kiri/kanan garis)
+_MARKER_LABEL_H = 18
 
 
 class WaveformWidget(QWidget):
-    """Widget waveform dengan zoom & playhead."""
+    """Widget waveform dengan zoom, playhead, markers, loop area."""
 
     seek_requested = Signal(int)  # ms posisi baru
     zoom_requested = Signal(float)  # faktor zoom (relatif)
+
+    # Marker signals (V0.5)
+    marker_add_requested = Signal(int)  # ms posisi user minta add (double click)
+    marker_selected_changed = Signal(str)  # marker_id (atau "" jika none)
+    marker_dragged = Signal(str, int)  # marker_id, new_time_ms (final drop)
+    marker_drag_moved = Signal(str, int)  # marker_id, preview (opsional real-time)
 
     # Zoom: pixel per detik. min=10 (sangat perkecil), max=2000 (sangat detail)
     _MIN_PPS = 10
@@ -41,8 +61,8 @@ class WaveformWidget(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setMinimumHeight(140)
-        self.setMouseTracking(False)
+        self.setMinimumHeight(160)  # tambah tinggi untuk label marker di atas
+        self.setMouseTracking(True)
         self._peaks: WaveformPeaks | None = None
         self._duration_ms: int = 0
         self._position_ms: int = 0
@@ -50,9 +70,18 @@ class WaveformWidget(QWidget):
         self._offset_ms: int = 0  # posisi paling kiri di viewport
         self._loading = False
 
-        # Area loop (opsional, dari loop controller nanti)
+        # Area loop
         self._loop_a_ms: int | None = None
         self._loop_b_ms: int | None = None
+
+        # Markers
+        self._markers: list[Marker] = []
+        self._selected_marker_id: str = ""
+        self._drag_marker_id: str | None = None
+        self._drag_start_x_offset_px: float = 0.0  # jarak x cursor ke titik marker saat tekan
+        self._label_font = QFont(self.font())
+        self._label_font.setPointSize(max(8, self.font().pointSize() - 1))
+        self._label_font.setBold(True)
 
     # ------------------------------------------------------------------
     # Public API
@@ -82,6 +111,31 @@ class WaveformWidget(QWidget):
         self._loop_a_ms = a_ms
         self._loop_b_ms = b_ms
         self.update()
+
+    # ------------------------------------------------------------------
+    # Public API — Markers (V0.5)
+    # ------------------------------------------------------------------
+    def set_markers(self, markers: Iterable[Marker]) -> None:
+        """Perbarui tampilan daftar marker dari collection."""
+        self._markers = [Marker(m.id, int(m.time_ms), m.label, m.color, m.note) for m in markers]
+        self.update()
+
+    def set_selected_marker(self, marker_id: str) -> None:
+        if marker_id != self._selected_marker_id:
+            self._selected_marker_id = marker_id
+            self.update()
+
+    def _hit_marker(self, x_px: float) -> Marker | None:
+        """Cari marker terdekat dalam _MARKER_HIT_PX pixel dari x_px."""
+        best: Marker | None = None
+        best_d: float = 1e12
+        for m in self._markers:
+            x = self._ms_to_x(m.time_ms)
+            d = abs(x - x_px)
+            if d <= _MARKER_HIT_PX and d < best_d:
+                best = m
+                best_d = d
+        return best
 
     def set_zoom(self, pps: float) -> None:
         self._pps = max(self._MIN_PPS, min(self._MAX_PPS, float(pps)))
@@ -154,6 +208,40 @@ class WaveformWidget(QWidget):
         painter.setPen(QPen(_PLAYHEAD, 2))
         painter.drawLine(int(ph_x), rect.top(), int(ph_x), rect.bottom())
 
+        # Render markers (V0.5): garis + label text box
+        painter.setFont(self._label_font)
+        for m in self._markers:
+            x = self._ms_to_x(m.time_ms)
+            if x < -50 or x > rect.width() + 50:
+                continue
+            color = QColor(m.color) if m.color else QColor("#C43A31")
+            selected = m.id == self._selected_marker_id
+            dragging = m.id == self._drag_marker_id
+            # Garis penanda
+            pen_w = 3 if selected else 2
+            painter.setPen(QPen(color, pen_w))
+            painter.drawLine(
+                int(x),
+                rect.top() + _MARKER_LABEL_H + 2,
+                int(x),
+                rect.bottom(),
+            )
+            fm = painter.fontMetrics()
+            label = m.label or "M?"
+            label_w = min(120, max(22, fm.horizontalAdvance(label) + 8))
+            label_rect = QRectF(x - label_w / 2.0, rect.top(), label_w, _MARKER_LABEL_H)
+            painter.setBrush(QBrush(color))
+            painter.setPen(QPen(color.darker(120) if selected else color, 1))
+            painter.drawRoundedRect(label_rect, 3, 3)
+            # Teks label (putih agar terbaca pada latar berwarna)
+            painter.setPen(QColor("#FFFFFF"))
+            painter.drawText(label_rect, Qt.AlignmentFlag.AlignCenter, label)
+            if dragging:
+                # Indikator drag tebal di sekitar label
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.setPen(QPen(_PLAYHEAD, 1, Qt.PenStyle.DashLine))
+                painter.drawRect(label_rect.adjusted(-2, -2, 2, 2))
+
     def _draw_peaks(self, painter: QPainter, rect: QRectF) -> None:
         if self._peaks is None or self._duration_ms <= 0:
             return
@@ -197,14 +285,60 @@ class WaveformWidget(QWidget):
             painter.fillRect(QRectF(x, y2, x2 - x, y1 - y2), _WAVE)
 
     # ------------------------------------------------------------------
-    # Interaksi mouse
+    # Interaksi mouse (V0.5: support marker select/drag + double-click add)
     # ------------------------------------------------------------------
-    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if self._duration_ms <= 0 or event.button() != Qt.MouseButton.LeftButton:
             return
         ms = self._x_to_ms(float(event.position().x()))
+        self.marker_add_requested.emit(int(ms))
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if self._duration_ms <= 0 or event.button() != Qt.MouseButton.LeftButton:
+            return
+        cursor_x = float(event.position().x())
+
+        # Prioritas 1: user menekan tepat di atas marker → select + prepare drag
+        hit = self._hit_marker(cursor_x)
+        if hit is not None:
+            self._drag_marker_id = hit.id
+            self._drag_click_offset_px = cursor_x - self._ms_to_x(hit.time_ms)
+            self._selected_marker_id = hit.id
+            self.marker_selected_changed.emit(hit.id)
+            self.update()
+            return
+
+        # Prioritas 2: klik area kosong → seek + deselect marker
+        ms = self._x_to_ms(cursor_x)
+        self._selected_marker_id = ""
+        self.marker_selected_changed.emit("")
         self.seek_requested.emit(ms)
         self.set_position(ms)
+        self.update()
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if self._drag_marker_id is None:
+            return
+        new_x = float(event.position().x()) - self._drag_click_offset_px
+        new_ms = self._x_to_ms(new_x)
+        # Emit real-time preview (MainWindow paksa enforce gap sebelum mutate collection)
+        self.marker_drag_moved.emit(self._drag_marker_id, new_ms)
+        # Update visual preview (tanpa ubah state collection)
+        for m in self._markers:
+            if m.id == self._drag_marker_id:
+                m.time_ms = new_ms
+                break
+        self.update()
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if self._drag_marker_id is None or event.button() != Qt.MouseButton.LeftButton:
+            return
+        marker_id = self._drag_marker_id
+        self._drag_marker_id = None
+        new_x = float(event.position().x()) - self._drag_click_offset_px
+        new_ms = self._x_to_ms(new_x)
+        self.marker_dragged.emit(marker_id, int(new_ms))
+        self.update()
 
     def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802
         modifiers = event.modifiers()
